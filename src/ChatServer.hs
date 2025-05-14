@@ -142,10 +142,10 @@ handleCommand server client@Client{..} command = case command of
         ('/' : _) : _ -> sendPrivateNotice client "Unrecognized command"
         strs | all null strs -> return ()
         _ -> broadcast server $ PublicMessage clId what
-      ShowPrivate (PrivateMessage from msg) -> writeTChan clMessages $ printf "*%s*: %s" from msg
-      ShowPrivate (PrivateNotice msg) -> writeTChan clMessages $ printf "*server*: %s" msg
-      ShowPublic (PublicNotice msg) -> writeTChan clMessages $ printf "<server>: %s" msg
-      ShowPublic (PublicMessage from msg) -> writeTChan clMessages $ printf "<%s>: %s" from msg -- printLine clHandle $ printf "<%s>: %s" from msg
+      ShowPrivate (PrivateMessage from msg) -> writeTChan clMessages $ printf "*%s* %s" from msg
+      ShowPrivate (PrivateNotice msg) -> writeTChan clMessages $ printf "*server* %s" msg
+      ShowPublic (PublicNotice msg) -> writeTChan clMessages $ printf "<server> %s" msg
+      ShowPublic (PublicMessage from msg) -> writeTChan clMessages $ printf "<%s> %s" from msg -- printLine clHandle $ printf "<%s>: %s" from msg
     return True
 
 sendPerformCommand :: Client -> String -> STM ()
@@ -178,7 +178,7 @@ runServer = withSocketsDo $ do
           broadcast server (PublicNotice "Killing server")
         acceptLoop = forever $ accept sock $ \(handle, peer) -> do
           printf "Accepted connection from %s\n" (show peer)
-          tui <- UI <$> newTerminalUI handle "Text:"
+          tui <- UI <$> newTerminalUI handle "Text: "
           forkFinally (talk tui server) (\_ -> withUI tui cleanupUI)
 
     race_ (atomically checkQuit >> print "Killing server") acceptLoop

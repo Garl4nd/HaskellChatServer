@@ -30,12 +30,7 @@ unlockTerminal :: TerminalUI -> IO ()
 unlockTerminal = const $ return () -- atomically . flip putTMVar () . inputLock
 
 readTerminalInput :: TerminalUI -> IO String
-readTerminalInput tui@TerminalUI{..} = do
-  lockTerminal tui
-  result <- hGetLine handle
-  cleanTerminalInput tui
-  unlockTerminal tui
-  return result
+readTerminalInput tui@TerminalUI{..} = readTerminalInputWithPrompt tui prompt
 
 readTerminalInputWithPrompt :: TerminalUI -> String -> IO String
 readTerminalInputWithPrompt tui@TerminalUI{handle} prompt = do

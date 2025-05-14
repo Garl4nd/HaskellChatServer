@@ -12,7 +12,8 @@ import System.IO
 
 listenOn :: Int -> (Socket -> IO a) -> IO a
 listenOn port server = do
-  addr <- Tcp.resolve Stream Nothing (show port) [AI_PASSIVE] NEL.head
+  addr <- Tcp.resolve Stream (Just "0.0.0.0") (show port) [AI_PASSIVE] NEL.head
+  print $ addrAddress addr
   bracket (Tcp.openTCPServerSocket addr) close server
 
 accept :: Socket -> ((Handle, SockAddr) -> IO a) -> IO a
