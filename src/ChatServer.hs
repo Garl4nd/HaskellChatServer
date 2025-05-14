@@ -10,6 +10,7 @@ import Control.Concurrent.Async
 import Control.Concurrent.STM
 import Control.Exception hiding (handle)
 import Control.Monad
+import Data.Function (fix)
 import qualified Data.Map as M
 import NetworkUtils
 import System.IO
@@ -71,7 +72,7 @@ runClient server client@Client{..} = race_ serverThread uiThread -- uiThread
   serverThread = join . atomically $ do
     userState <- readTVar clState
     case userState of
-      Kicked reason -> return $ withUI clUI $ writeUI (printf "You have been kicked! Reason: %s" reason)
+      Kicked reason -> return $ withUI clUI $ \ui -> writeUI ui (printf "You have been kicked! Reason: %s" reason)
       Logged -> return $
         do
           command <- atomically $ readTChan clPrivateCommands `orElse` readTChan clPublicCommands
@@ -80,15 +81,16 @@ runClient server client@Client{..} = race_ serverThread uiThread -- uiThread
 
   uiThread = do
     inputChannel :: TChan (String) <- atomically $ newTChan
-    let getInput = forever $ do
-          input <- withUI clUI readUI
-          atomically $ writeTChan inputChannel input
-    withAsync getInput $ \_ -> forever $ do
-      action <- atomically $ (Left <$> (readTChan clMessages)) `orElse` (Right <$> (readTChan inputChannel))
-      case action of
-        Left message -> withUI clUI $ writeUI message
-        Right input -> do
-          atomically $ sendPerformCommand client input
+    withUI clUI $ \ui -> do
+      let getInput = forever $ do
+            input <- readUI ui
+            atomically $ writeTChan inputChannel input
+      withAsync getInput $ \_ -> forever $ do
+        action <- atomically $ (Left <$> (readTChan clMessages)) `orElse` (Right <$> (readTChan inputChannel))
+        case action of
+          Left message -> writeUI ui message
+          Right input -> do
+            atomically $ sendPerformCommand client input
 
 performAdminAction :: Server -> Client -> Maybe ClientID -> (Maybe Client -> STM Result) -> STM ()
 performAdminAction Server{clMap} issuer targetId action = do
@@ -118,11 +120,11 @@ kickUser server kicker kickeeId reason = performAdminAction server kicker (Just 
       Nothing -> return $ Fail (printf "User %s not found" kickeeId)
 
 makeNewAdmin :: Server -> Client -> ClientID -> STM ()
-makeNewAdmin server client@Client{clId} targetId = performAdminAction server client (Just targetId) $ \client -> do
-  case client of
+makeNewAdmin server issuer@Client{clId = issuerId} targetId = performAdminAction server issuer (Just targetId) $ \target -> do
+  case target of
     Just Client{clIsAdmin} -> do
       writeTVar clIsAdmin True
-      broadcast server $ PublicNotice (printf "User %s was promoted to admin by %s" targetId clId)
+      broadcast server $ PublicNotice (printf "User %s was promoted to admin by %s" targetId issuerId)
       return OK
     Nothing -> return $ Fail "User not found"
 
@@ -138,7 +140,7 @@ handleCommand server client@Client{..} command = case command of
         ["/killserver"] -> performAdminAction server client Nothing (\_ -> OK <$ writeTVar (serverState server) ServerOff)
         ("/notice" : message) -> performAdminAction server client Nothing (\_ -> OK <$ broadcast server (PublicNotice (unwords message)))
         ('/' : _) : _ -> sendPrivateNotice client "Unrecognized command"
-        strs | all (null) strs -> return ()
+        strs | all null strs -> return ()
         _ -> broadcast server $ PublicMessage clId what
       ShowPrivate (PrivateMessage from msg) -> writeTChan clMessages $ printf "*%s*: %s" from msg
       ShowPrivate (PrivateNotice msg) -> writeTChan clMessages $ printf "*server*: %s" msg
@@ -183,17 +185,16 @@ runServer = withSocketsDo $ do
 
 port :: Int
 port = 44444
+
 talk :: UI -> Server -> IO ()
-talk ui server = do
-  withUI ui setupUI
-  readName
- where
-  readName = do
-    name <- withUI ui $ readUIWithPrompt "Enter your name: "
+talk clientUI server = withUI clientUI $ \ui -> do
+  setupUI ui
+  fix $ \loop -> do
+    name <- readUIWithPrompt ui "Enter your name: "
     if null name
-      then readName
+      then loop
       else mask $ \restore -> do
-        addResult <- atomically $ checkAndAddClient server name ui
+        addResult <- atomically $ checkAndAddClient server name clientUI
         case addResult of
-          Nothing -> restore (withUI ui (writeUI (printf "User %s already logged on server! Choose a different name" name)) >> readName)
+          Nothing -> restore (writeUI ui (printf "User %s already logged on server! Choose a different name" name) >> loop)
           Just newClient -> restore (runClient server newClient) `finally` removeClient server name >> printf "User %s disconnected" name

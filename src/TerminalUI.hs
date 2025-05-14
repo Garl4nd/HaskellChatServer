@@ -37,8 +37,8 @@ readTerminalInput tui@TerminalUI{..} = do
   unlockTerminal tui
   return result
 
-readTerminalInputWithPrompt :: String -> TerminalUI -> IO String
-readTerminalInputWithPrompt prompt tui@TerminalUI{handle} = do
+readTerminalInputWithPrompt :: TerminalUI -> String -> IO String
+readTerminalInputWithPrompt tui@TerminalUI{handle} prompt = do
   lockTerminal tui
   hPutStr handle prompt
   hFlush handle
@@ -57,8 +57,8 @@ setupTerminalUI TerminalUI{handle} = do
   hSetNewlineMode handle universalNewlineMode
   hSetBuffering handle LineBuffering
 
-writeToTerminal :: String -> TerminalUI -> IO ()
-writeToTerminal text tui@TerminalUI{handle, prompt} = do
+writeToTerminal :: TerminalUI -> String -> IO ()
+writeToTerminal tui@TerminalUI{handle, prompt} text = do
   lockTerminal tui
   hCursorUpLine handle 0
   hClearLine handle
