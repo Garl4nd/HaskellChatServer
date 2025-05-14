@@ -11,6 +11,7 @@ import Control.Concurrent.STM
 import Control.Exception hiding (handle)
 import Control.Monad
 import Data.Function (fix)
+import Data.List (intercalate)
 import qualified Data.Map as M
 import NetworkUtils
 import System.IO
@@ -36,9 +37,6 @@ newServer = atomically $ do
   broadcastChannel <- newTChan
   serverState <- newTVar ServerOn
   return Server{..}
-
-broadcast :: Server -> BroadcastMessage -> STM ()
-broadcast Server{broadcastChannel} msg = writeTChan broadcastChannel (ShowPublic msg)
 
 createNewClient :: Server -> ClientID -> UI -> STM Client
 createNewClient Server{clMap, broadcastChannel} clId clUI = do
@@ -92,6 +90,18 @@ runClient server client@Client{..} = race_ serverThread uiThread -- uiThread
           Right input -> do
             atomically $ sendPerformCommand client input
 
+broadcast :: Server -> BroadcastMessage -> STM ()
+broadcast Server{broadcastChannel} msg = writeTChan broadcastChannel (ShowPublic msg)
+
+getClientList :: Server -> STM [ClientID]
+getClientList Server{clMap} = M.keys <$> readTVar clMap
+
+getAdminList :: Server -> STM [ClientID]
+getAdminList Server{clMap} = do
+  clients <- M.elems <$> readTVar clMap
+  admins <- filterM (readTVar . clIsAdmin) clients
+  return $ clId <$> admins
+
 performAdminAction :: Server -> Client -> Maybe ClientID -> (Maybe Client -> STM Result) -> STM ()
 performAdminAction Server{clMap} issuer targetId action = do
   isIssuerAdmin <- readTVar $ clIsAdmin issuer
@@ -139,11 +149,13 @@ handleCommand server client@Client{..} command = case command of
         (["/newadmin", who]) -> do makeNewAdmin server client who
         ["/killserver"] -> performAdminAction server client Nothing (\_ -> OK <$ writeTVar (serverState server) ServerOff)
         ("/notice" : message) -> performAdminAction server client Nothing (\_ -> OK <$ broadcast server (PublicNotice (unwords message)))
+        ["/users"] -> getClientList server >>= \clientList -> sendPrivateNotice client (printf "Users: %s" $ intercalate ", " clientList)
+        ["/admins"] -> getAdminList server >>= \adminList -> sendPrivateNotice client (printf "Admins: %s" $ intercalate ", " adminList)
         ('/' : _) : _ -> sendPrivateNotice client "Unrecognized command"
         strs | all null strs -> return ()
         _ -> broadcast server $ PublicMessage clId what
-      ShowPrivate (PrivateMessage from msg) -> writeTChan clMessages $ printf "*%s* %s" from msg
-      ShowPrivate (PrivateNotice msg) -> writeTChan clMessages $ printf "*server* %s" msg
+      ShowPrivate (PrivateMessage from msg) -> writeTChan clMessages $ printf "<*%s*> %s" from msg
+      ShowPrivate (PrivateNotice msg) -> writeTChan clMessages $ printf "<*server*> %s" msg
       ShowPublic (PublicNotice msg) -> writeTChan clMessages $ printf "<server> %s" msg
       ShowPublic (PublicMessage from msg) -> writeTChan clMessages $ printf "<%s> %s" from msg -- printLine clHandle $ printf "<%s>: %s" from msg
     return True
@@ -160,12 +172,6 @@ sendPrivateMessage Server{clMap} Client{..} toId msg = do
   case M.lookup toId clients of
     Nothing -> writeTChan clPrivateCommands $ ShowPrivate (PrivateNotice $ printf "User %s is not logged in!" toId)
     Just Client{clPrivateCommands = targetCommands} -> writeTChan targetCommands (ShowPrivate $ PrivateMessage clId msg)
-
-promptText :: Handle -> String -> IO String
-promptText handle prompt = do
-  hPutStr handle prompt
-  hFlush handle
-  hGetLine handle
 
 runServer :: IO ()
 runServer = withSocketsDo $ do
