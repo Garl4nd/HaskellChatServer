@@ -28,6 +28,8 @@ library
       ChatServer
       Lib
       NetworkUtils
+      TerminalUI
+      UIInterface
   other-modules:
       Paths_HaskellChatServer
   autogen-modules:

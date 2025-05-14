@@ -1,4 +1,3 @@
-{-# LANGUAGE GADTs #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -13,9 +12,10 @@ import Control.Exception hiding (handle)
 import Control.Monad
 import qualified Data.Map as M
 import NetworkUtils
-import System.Console.ANSI
 import System.IO
+import TerminalUI
 import Text.Printf
+import UIInterface
 
 data Result = OK | Fail String
 
@@ -64,72 +64,6 @@ removeClient :: Server -> ClientID -> IO ()
 removeClient server@Server{..} clId = atomically $ do
   modifyTVar clMap (M.delete clId)
   broadcast server (PublicNotice $ printf "User %s left the chat" clId)
-
-data TerminalUI = TerminalUI {inputLock :: TMVar (), handle :: Handle, prompt :: String}
-class IsUI u where
-  setupUI :: u -> IO ()
-  writeUI :: String -> u -> IO ()
-  readUI :: u -> IO String
-  readUIWithPrompt :: String -> u -> IO String
-  readCleanUpUI :: u -> IO ()
-  eadCleanUpUI :: u -> IO ()
-  cleanupUI :: u -> IO ()
-
-data UI where
-  UI :: (IsUI u) => u -> UI
-
-withUI :: UI -> (forall ui. (IsUI ui) => ui -> r) -> r
-withUI (UI u) f = f u
-
-instance IsUI TerminalUI where
-  writeUI = writeToTerminal
-  readUI = readTerminalInput
-  readCleanUpUI = cleanTerminalInput
-  setupUI = setupTerminalUI
-  readUIWithPrompt = readTerminalInputWithPrompt
-  cleanupUI = hClose . handle
-
-newTerminalUI :: Handle -> String -> IO TerminalUI
-newTerminalUI handle prompt = do
-  inputLock <- atomically $ newTMVar ()
-  return TerminalUI{..}
-
-lockTerminal :: TerminalUI -> IO ()
-lockTerminal = const $ return () -- atomically . takeTMVar . inputLock
-
-unlockTerminal :: TerminalUI -> IO ()
-unlockTerminal = const $ return () -- atomically . flip putTMVar () . inputLock
-
-readTerminalInput :: TerminalUI -> IO String
-readTerminalInput tui@TerminalUI{..} = do
-  lockTerminal tui
-  result <- hGetLine handle
-  cleanTerminalInput tui
-  unlockTerminal tui
-  return result
-
-readTerminalInputWithPrompt :: String -> TerminalUI -> IO String
-readTerminalInputWithPrompt prompt tui@TerminalUI{handle} = do
-  lockTerminal tui
-  hPutStr handle prompt
-  hFlush handle
-  res <- hGetLine handle
-  cleanTerminalInput tui
-  unlockTerminal tui
-  return res
-
-cleanTerminalInput :: TerminalUI -> IO ()
-cleanTerminalInput TerminalUI{..} = do
-  hCursorUpLine handle 1
-  hClearLine handle
-
-setupTerminalUI :: TerminalUI -> IO ()
-setupTerminalUI TerminalUI{handle} = do
-  hSetNewlineMode handle universalNewlineMode
-  hSetBuffering handle LineBuffering
-
-writeToTerminal :: String -> TerminalUI -> IO ()
-writeToTerminal msg tui@TerminalUI{handle} = lockTerminal tui >> printLine handle msg >> unlockTerminal tui
 
 runClient :: Server -> Client -> IO ()
 runClient server client@Client{..} = race_ serverThread uiThread -- uiThread
@@ -230,14 +164,6 @@ promptText handle prompt = do
   hPutStr handle prompt
   hFlush handle
   hGetLine handle
-
-printLine :: Handle -> String -> IO ()
-printLine handle text = do
-  hCursorUpLine handle 0
-  hClearLine handle
-  hPutStrLn handle text
-  hPutStr handle $ "Text: "
-  hFlush handle
 
 runServer :: IO ()
 runServer = withSocketsDo $ do
