@@ -14,7 +14,6 @@ import Data.Function (fix)
 import Data.List (intercalate)
 import qualified Data.Map as M
 import NetworkUtils
-import System.IO
 import TerminalUI
 import Text.Printf
 import UIInterface
@@ -56,13 +55,13 @@ checkAndAddClient server@Server{clMap} clId ui = do
     else do
       newClient <- createNewClient server clId ui
       modifyTVar clMap (M.insert clId newClient)
-      broadcast server (PublicNotice $ printf "Client %s joined the chat" clId)
+      broadcastNotice server $ printf "Client %s joined the chat" clId
       return $ Just newClient
 
 removeClient :: Server -> ClientID -> IO ()
 removeClient server@Server{..} clId = atomically $ do
   modifyTVar clMap (M.delete clId)
-  broadcast server (PublicNotice $ printf "User %s left the chat" clId)
+  broadcastNotice server (printf "User %s left the chat" clId)
 
 runClient :: Server -> Client -> IO ()
 runClient server client@Client{..} = race_ serverThread uiThread -- uiThread
@@ -93,6 +92,24 @@ runClient server client@Client{..} = race_ serverThread uiThread -- uiThread
 broadcast :: Server -> BroadcastMessage -> STM ()
 broadcast Server{broadcastChannel} msg = writeTChan broadcastChannel (ShowPublic msg)
 
+broadcastNotice :: Server -> String -> STM ()
+broadcastNotice server notice = broadcast server $ PublicNotice notice
+
+broadcastMessage :: Server -> ClientID -> String -> STM ()
+broadcastMessage server clId msg = broadcast server (PublicMessage clId msg)
+sendPerformCommand :: Client -> String -> STM ()
+sendPerformCommand Client{clPrivateCommands} cmd = writeTChan clPrivateCommands (Perform cmd)
+
+sendPrivateNotice :: Client -> String -> STM ()
+sendPrivateNotice Client{..} msg = writeTChan clPrivateCommands (ShowPrivate $ PrivateNotice msg)
+
+sendPrivateMessage :: Server -> Client -> ClientID -> String -> STM ()
+sendPrivateMessage Server{clMap} Client{..} toId msg = do
+  clients <- readTVar clMap
+  case M.lookup toId clients of
+    Nothing -> writeTChan clPrivateCommands $ ShowPrivate (PrivateNotice $ printf "User %s is not logged in!" toId)
+    Just Client{clPrivateCommands = targetCommands} -> writeTChan targetCommands (ShowPrivate $ PrivateMessage clId msg)
+
 getClientList :: Server -> STM [ClientID]
 getClientList Server{clMap} = M.keys <$> readTVar clMap
 
@@ -103,13 +120,13 @@ getAdminList Server{clMap} = do
   return $ clId <$> admins
 
 performAdminAction :: Server -> Client -> Maybe ClientID -> (Maybe Client -> STM Result) -> STM ()
-performAdminAction Server{clMap} issuer targetId action = do
+performAdminAction Server{clMap} issuer target action = do
   isIssuerAdmin <- readTVar $ clIsAdmin issuer
   actionResult <-
     if (not isIssuerAdmin)
       then return $ Fail "Only admins can perform this action"
       else do
-        case targetId of
+        case target of
           Nothing -> action Nothing
           Just targetId -> do
             clients <- readTVar clMap
@@ -125,7 +142,7 @@ kickUser server kicker kickeeId reason = performAdminAction server kicker (Just 
     else case target of
       Just Client{..} -> do
         writeTVar clState (Kicked reason)
-        broadcast server $ PublicNotice (printf "User %s has been kicked. Reason: %s" clId reason)
+        broadcastNotice server (printf "User %s has been kicked. Reason: %s" clId reason)
         return OK
       Nothing -> return $ Fail (printf "User %s not found" kickeeId)
 
@@ -134,7 +151,7 @@ makeNewAdmin server issuer@Client{clId = issuerId} targetId = performAdminAction
   case target of
     Just Client{clIsAdmin} -> do
       writeTVar clIsAdmin True
-      broadcast server $ PublicNotice (printf "User %s was promoted to admin by %s" targetId issuerId)
+      broadcastNotice server (printf "User %s has been promoted to admin by %s" targetId issuerId)
       return OK
     Nothing -> return $ Fail "User not found"
 
@@ -148,40 +165,26 @@ handleCommand server client@Client{..} command = case command of
         ("/kick" : who : reason) -> kickUser server client who (unwords reason)
         (["/newadmin", who]) -> do makeNewAdmin server client who
         ["/killserver"] -> performAdminAction server client Nothing (\_ -> OK <$ writeTVar (serverState server) ServerOff)
-        ("/notice" : message) -> performAdminAction server client Nothing (\_ -> OK <$ broadcast server (PublicNotice (unwords message)))
+        ("/notice" : message) -> performAdminAction server client Nothing (\_ -> OK <$ broadcastNotice server (unwords message))
         ["/users"] -> getClientList server >>= \clientList -> sendPrivateNotice client (printf "Users: %s" $ intercalate ", " clientList)
         ["/admins"] -> getAdminList server >>= \adminList -> sendPrivateNotice client (printf "Admins: %s" $ intercalate ", " adminList)
         ('/' : _) : _ -> sendPrivateNotice client "Unrecognized command"
         strs | all null strs -> return ()
-        _ -> broadcast server $ PublicMessage clId what
+        _ -> broadcastMessage server clId what
       ShowPrivate (PrivateMessage from msg) -> writeTChan clMessages $ printf "<*%s*> %s" from msg
       ShowPrivate (PrivateNotice msg) -> writeTChan clMessages $ printf "<*server*> %s" msg
       ShowPublic (PublicNotice msg) -> writeTChan clMessages $ printf "<server> %s" msg
       ShowPublic (PublicMessage from msg) -> writeTChan clMessages $ printf "<%s> %s" from msg -- printLine clHandle $ printf "<%s>: %s" from msg
     return True
 
-sendPerformCommand :: Client -> String -> STM ()
-sendPerformCommand Client{clPrivateCommands} cmd = writeTChan clPrivateCommands (Perform cmd)
-
-sendPrivateNotice :: Client -> String -> STM ()
-sendPrivateNotice Client{..} msg = writeTChan clPrivateCommands (ShowPrivate $ PrivateNotice msg)
-
-sendPrivateMessage :: Server -> Client -> ClientID -> String -> STM ()
-sendPrivateMessage Server{clMap} Client{..} toId msg = do
-  clients <- readTVar clMap
-  case M.lookup toId clients of
-    Nothing -> writeTChan clPrivateCommands $ ShowPrivate (PrivateNotice $ printf "User %s is not logged in!" toId)
-    Just Client{clPrivateCommands = targetCommands} -> writeTChan targetCommands (ShowPrivate $ PrivateMessage clId msg)
-
 runServer :: IO ()
 runServer = withSocketsDo $ do
   server <- newServer
-  printf "Listening on port %d\n" port
   listenOn port $ \sock -> do
     let checkQuit = do
           state <- readTVar (serverState server)
           check (state == ServerOff)
-          broadcast server (PublicNotice "Killing server")
+          broadcastNotice server "Killing server"
         acceptLoop = forever $ accept sock $ \(handle, peer) -> do
           printf "Accepted connection from %s\n" (show peer)
           tui <- UI <$> newTerminalUI handle "Text: "
