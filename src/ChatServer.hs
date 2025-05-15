@@ -87,28 +87,29 @@ runClient server client@Client{..} = race_ serverThread uiThread -- uiThread
         case action of
           Left message -> writeUI ui message
           Right input -> do
-            atomically $ sendPerformCommand client input
+            atomically $ sendPrivateCommand client (Perform input)
 
-broadcast :: Server -> BroadcastMessage -> STM ()
-broadcast Server{broadcastChannel} msg = writeTChan broadcastChannel (ShowPublic msg)
+broadcastCommand :: Server -> Command -> STM ()
+broadcastCommand Server{broadcastChannel} cmd = writeTChan broadcastChannel cmd -- (ShowPublic msg)
 
 broadcastNotice :: Server -> String -> STM ()
-broadcastNotice server notice = broadcast server $ PublicNotice notice
+broadcastNotice server notice = broadcastCommand server $ ShowPublic (PublicNotice notice)
 
 broadcastMessage :: Server -> ClientID -> String -> STM ()
-broadcastMessage server clId msg = broadcast server (PublicMessage clId msg)
-sendPerformCommand :: Client -> String -> STM ()
-sendPerformCommand Client{clPrivateCommands} cmd = writeTChan clPrivateCommands (Perform cmd)
+broadcastMessage server clId msg = broadcastCommand server $ ShowPublic (PublicMessage clId msg)
+
+sendPrivateCommand :: Client -> Command -> STM ()
+sendPrivateCommand Client{clPrivateCommands} cmd = writeTChan clPrivateCommands cmd
 
 sendPrivateNotice :: Client -> String -> STM ()
-sendPrivateNotice Client{..} msg = writeTChan clPrivateCommands (ShowPrivate $ PrivateNotice msg)
+sendPrivateNotice client msg = sendPrivateCommand client (ShowPrivate $ PrivateNotice msg)
 
 sendPrivateMessage :: Server -> Client -> ClientID -> String -> STM ()
-sendPrivateMessage Server{clMap} Client{..} toId msg = do
+sendPrivateMessage Server{clMap} client@Client{clId} toId msg = do
   clients <- readTVar clMap
   case M.lookup toId clients of
-    Nothing -> writeTChan clPrivateCommands $ ShowPrivate (PrivateNotice $ printf "User %s is not logged in!" toId)
-    Just Client{clPrivateCommands = targetCommands} -> writeTChan targetCommands (ShowPrivate $ PrivateMessage clId msg)
+    Nothing -> sendPrivateNotice client $ printf "User %s is not logged in!" toId
+    Just target -> sendPrivateCommand target (ShowPrivate $ PrivateMessage clId msg)
 
 getClientList :: Server -> STM [ClientID]
 getClientList Server{clMap} = M.keys <$> readTVar clMap
@@ -153,7 +154,13 @@ makeNewAdmin server issuer@Client{clId = issuerId} targetId = performAdminAction
       writeTVar clIsAdmin True
       broadcastNotice server (printf "User %s has been promoted to admin by %s" targetId issuerId)
       return OK
-    Nothing -> return $ Fail "User not found"
+    Nothing -> return $ Fail (printf "User %s not found" targetId)
+
+renameUser :: Server -> Client -> ClientID -> ClientID -> STM ()
+renameUser server@Server{clMap} issuer oldName newName = performAdminAction server issuer (Just oldName) $ \target -> do
+  case target of
+    Just client -> modifyTVar clMap (M.insert newName client . M.delete oldName) >> return OK
+    Nothing -> return $ Fail (printf "User %s not found" oldName)
 
 handleCommand :: Server -> Client -> Command -> STM Bool
 handleCommand server client@Client{..} command = case command of
@@ -163,6 +170,7 @@ handleCommand server client@Client{..} command = case command of
       (Perform what) -> case words what of
         ("/tell" : to : msg) -> sendPrivateMessage server client to (unwords msg)
         ("/kick" : who : reason) -> kickUser server client who (unwords reason)
+        ("/rename" : who : newName : _) -> renameUser server client who newName
         (["/newadmin", who]) -> do makeNewAdmin server client who
         ["/killserver"] -> performAdminAction server client Nothing (\_ -> OK <$ writeTVar (serverState server) ServerOff)
         ("/notice" : message) -> performAdminAction server client Nothing (\_ -> OK <$ broadcastNotice server (unwords message))
