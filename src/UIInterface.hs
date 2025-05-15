@@ -8,7 +8,6 @@ class IsUI u where
   writeUI :: u -> String -> IO ()
   readUI :: u -> IO String
   readUIWithPrompt :: u -> String -> IO String
-  readCleanUpUI :: u -> IO ()
   cleanupUI :: u -> IO ()
 
 data UI where

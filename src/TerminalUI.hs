@@ -9,37 +9,34 @@ import System.Console.ANSI
 import System.IO
 import UIInterface
 
-data TerminalUI = TerminalUI {inputLock :: TMVar (), handle :: Handle, prompt :: String}
+data TerminalUI = TerminalUI {uiLock :: TMVar (), handle :: Handle, prompt :: String}
 instance IsUI TerminalUI where
   setupUI = setupTerminalUI
   writeUI = writeToTerminal
   readUI = readTerminalInput
   readUIWithPrompt = readTerminalInputWithPrompt
-  readCleanUpUI = cleanTerminalInput
-  cleanupUI = hClose . handle
+  cleanupUI tui = writeToTerminal tui "Connection over" >> hClose (handle tui)
 
 newTerminalUI :: Handle -> String -> IO TerminalUI
 newTerminalUI handle prompt = do
-  inputLock <- atomically $ newTMVar ()
+  uiLock <- atomically $ newTMVar ()
   return TerminalUI{..}
 
 lockTerminal :: TerminalUI -> IO ()
-lockTerminal = const $ return () -- atomically . takeTMVar . inputLock
+lockTerminal = atomically . takeTMVar . uiLock
 
 unlockTerminal :: TerminalUI -> IO ()
-unlockTerminal = const $ return () -- atomically . flip putTMVar () . inputLock
+unlockTerminal = atomically . flip putTMVar () . uiLock
 
 readTerminalInput :: TerminalUI -> IO String
 readTerminalInput tui@TerminalUI{..} = readTerminalInputWithPrompt tui prompt
 
 readTerminalInputWithPrompt :: TerminalUI -> String -> IO String
 readTerminalInputWithPrompt tui@TerminalUI{handle} prompt = do
-  lockTerminal tui
   hPutStr handle prompt
   hFlush handle
   res <- hGetLine handle
   cleanTerminalInput tui
-  unlockTerminal tui
   return res
 
 cleanTerminalInput :: TerminalUI -> IO ()
@@ -54,10 +51,8 @@ setupTerminalUI TerminalUI{handle} = do
 
 writeToTerminal :: TerminalUI -> String -> IO ()
 writeToTerminal tui@TerminalUI{handle, prompt} text = do
-  lockTerminal tui
   hCursorUpLine handle 0
   hClearLine handle
   hPutStrLn handle text
   hPutStr handle prompt
   hFlush handle
-  unlockTerminal tui
