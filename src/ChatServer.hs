@@ -100,7 +100,7 @@ runClient server client@Client{..} = race_ serverThread uiThread -- uiThread
             case action of
               Left message -> writeUI ui message
               Right input -> atomically $ sendPrivateCommand client (Perform input)
-      withAsync receiver $ \_ -> dispatcher `finally` print "Quitting"
+      withAsync receiver $ \_ -> dispatcher
 
 getDisplayName :: Client -> STM String
 getDisplayName Client{clId, clNickname} = do
