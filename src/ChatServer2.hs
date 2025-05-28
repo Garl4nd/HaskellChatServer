@@ -188,6 +188,7 @@ handleCommand server client@Client{..} command = case command of
 runServer2 :: IO ()
 runServer2 = withSocketsDo $ do
   server <- newServer
+  port <- getPort
   listenOn port $ \sock -> do
     let checkQuit = do
           state <- readTVar (serverState server)
@@ -205,8 +206,8 @@ runServer2 = withSocketsDo $ do
 
     race_ (atomically checkQuit >> print "Killing server") acceptLoop
 
-port :: Int
-port = 44444
+getPort :: IO Int
+getPort = read <$> readFile "port.txt"
 
 talk :: MedHandle -> Server -> IO ()
 talk uiHandle@MedHandle{..} server = fix $ \loop -> do

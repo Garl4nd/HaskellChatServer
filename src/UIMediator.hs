@@ -80,7 +80,7 @@ newMediator (UI ui) = do
                       _ -> throw err
                     Right () -> print "Finishing gracefully"
               )
-  let cleanUp = print "Cleaning up" >> (atomically $ writeTVar uiState Exit)
+  let cleanUp = putStrLn "Cleaning up" >> (atomically $ writeTVar uiState Exit)
   return (MedHandle{..}, uiThread)
 
 withMediator :: UI -> (MedHandle -> IO ()) -> IO ()

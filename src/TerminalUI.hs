@@ -21,7 +21,6 @@ instance IsUI TerminalUI where
 
 newTerminalUI :: Handle -> String -> IO TerminalUI
 newTerminalUI handle prompt = do
-<<<<<<< HEAD
   uiLock <- newMVar ()
   let termUI = TerminalUI{..}
   setupTerminalUI termUI
@@ -32,32 +31,16 @@ lockTerminal = takeMVar . uiLock
 
 unlockTerminal :: TerminalUI -> IO ()
 unlockTerminal = flip putMVar () . uiLock
-=======
-  uiLock <- atomically $ newTMVar ()
-  return TerminalUI{..}
-
-lockTerminal :: TerminalUI -> IO ()
-lockTerminal = atomically . takeTMVar . uiLock
-
-unlockTerminal :: TerminalUI -> IO ()
-unlockTerminal = atomically . flip putTMVar () . uiLock
->>>>>>> 85351c87e3cde84314100158e280b25a8bc0522e
 
 readTerminalInput :: TerminalUI -> IO String
 readTerminalInput tui@TerminalUI{..} = readTerminalInputWithPrompt tui prompt
 
 readTerminalInputWithPrompt :: TerminalUI -> String -> IO String
 readTerminalInputWithPrompt tui@TerminalUI{handle} prompt = do
-<<<<<<< HEAD
   bracket (lockTerminal tui) (const $ unlockTerminal tui) $ \_ -> do
     clearTerminalLine tui 0
     hPutStr handle prompt
     hFlush handle
-=======
-  bracket (lockTerminal tui) (const $ unlockTerminal tui) $ \_ -> clearTerminalLine tui 0
-  hPutStr handle prompt
-  hFlush handle
->>>>>>> 85351c87e3cde84314100158e280b25a8bc0522e
   res <- hGetLine handle
   clearTerminalLine tui 1
   return res
