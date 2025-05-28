@@ -68,7 +68,7 @@ removeClient server@Server{..} clId = atomically $ do
   broadcastNotice server (printf "User %s left the chat" clId)
 
 runClient :: Server -> Client -> IO ()
-runClient server client@Client{..} = race_ serverThread receiverThread `finally` (print "bam")
+runClient server client@Client{..} = race_ serverThread receiverThread
  where
   receiverThread = do
     readQueue <- openReadChannel clUI "Text: "
@@ -198,7 +198,7 @@ runServer2 = withSocketsDo $ do
           printf "Accepted connection from %s\n" (show peer)
           tui <- UI <$> newTerminalUI handle "Text: "
           forkFinally
-            (withMediator tui $ \handle -> talk handle server)
+            (withMediator tui $ \uiHandle -> talk uiHandle server)
             ( \case
                 Left (err :: SomeException) -> print err >> throw err
                 Right () -> putStrLn "Cleaning up" >> withUI tui cleanupUI
@@ -220,6 +220,6 @@ talk uiHandle@MedHandle{..} server = fix $ \loop -> do
         Nothing -> restore (enqueueWrite (printf "User %s already logged on server! Choose a different name" name) >> loop)
         Just newClient ->
           restore (runClient server newClient) `finally` do
-            print "Finalizing"
+            putStrLn "Finalizing"
             removeClient server name
             putStrLn $ printf "User %s disconnected" name

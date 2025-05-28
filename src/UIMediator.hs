@@ -4,14 +4,10 @@
 
 module UIMediator where
 
-import Control.Concurrent
 import Control.Concurrent.Async
 import Control.Concurrent.STM
 import Control.Exception
 import Control.Monad
-import Control.Monad.Fix
-import Debug.Trace (traceEventIO)
-import GHC.Conc (labelThread)
 import System.IO.Error (isEOFError, isIllegalOperation)
 import UIInterface
 
@@ -52,10 +48,8 @@ newMediator (UI ui) = do
           newVar <- newEmptyTMVar
           writeTQueue blockingQueue $ BlockingPrompt prompt newVar
           return newVar
-        traceEventIO "Waiting on Mvar"
         res <- atomically $ do
           takeTMVar resVar `orElse` (readTVar uiState >>= check . (== Exit) >> return "")
-        traceEventIO "After MVar"
         return res
 
       writer :: IO ()
@@ -80,7 +74,7 @@ newMediator (UI ui) = do
                       _ -> throw err
                     Right () -> print "Finishing gracefully"
               )
-  let cleanUp = putStrLn "Cleaning up" >> (atomically $ writeTVar uiState Exit)
+  let cleanUp = putStrLn "Cleaning mediator up" >> closeReadChannel >> (atomically $ writeTVar uiState Exit)
   return (MedHandle{..}, uiThread)
 
 withMediator :: UI -> (MedHandle -> IO ()) -> IO ()

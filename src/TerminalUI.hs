@@ -7,6 +7,7 @@ module TerminalUI (newTerminalUI) where
 import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Exception (bracket)
+import Control.Monad (when)
 import System.Console.ANSI
 import System.IO
 import UIInterface
@@ -16,7 +17,13 @@ instance IsUI TerminalUI where
   writeUI = writeToTerminal
   readUI = readTerminalInput
   readUIWithPrompt = readTerminalInputWithPrompt
-  cleanupUI = hClose . handle
+  cleanupUI ui = do
+    isValid <- isValidUI ui
+    when isValid $ do
+      clearTerminalLine ui 0
+      hPutStrLn (handle ui) "Closing session"
+      hClose $ handle ui
+
   isValidUI = fmap not . hIsClosed . handle
 
 newTerminalUI :: Handle -> String -> IO TerminalUI
