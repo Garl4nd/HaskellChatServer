@@ -31,6 +31,7 @@ library
       NetworkUtils
       TerminalUI
       UIInterface
+      UIMediator
   other-modules:
       Paths_HaskellChatServer
   autogen-modules:

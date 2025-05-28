@@ -1,9 +1,10 @@
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-{-# LANGUAGE FlexibleInstances #-}
 module ChatServer2 (runServer2) where
 
 import Control.Concurrent (forkFinally, forkIO)
@@ -14,11 +15,12 @@ import Control.Monad
 import Data.Function (fix)
 import Data.List (intercalate)
 import qualified Data.Map as M
+import GHC.IO.Handle (hClose)
 import NetworkUtils
 import TerminalUI
 import Text.Printf
 import UIInterface
-import GHC.IO.Handle (hClose)
+import UIMediator
 
 data Result = OK | Fail String
 
@@ -28,7 +30,7 @@ data Command = Perform String | ShowPrivate SingleUserMessage | ShowPublic Broad
 
 data ClientState = Logged | Kicked String deriving (Show)
 data ServerState = ServerOn | ServerOff deriving (Eq)
-data Client = Client {clId :: ClientID, clUI :: UIHandle, clIsAdmin :: TVar Bool, clMessages :: TChan String, clPrivateCommands :: TChan Command, clState :: TVar ClientState, clPublicCommands :: TChan Command}
+data Client = Client {clId :: ClientID, clUI :: MedHandle, clIsAdmin :: TVar Bool, clMessages :: TChan String, clPrivateCommands :: TChan Command, clState :: TVar ClientState, clPublicCommands :: TChan Command}
 data Server = Server {clMap :: TVar (M.Map ClientID Client), broadcastChannel :: TChan Command, serverState :: TVar ServerState}
 type ClientID = String
 
@@ -39,7 +41,7 @@ newServer = atomically $ do
   serverState <- newTVar ServerOn
   return Server{..}
 
-createNewClient :: Server -> ClientID -> UIHandle -> STM Client
+createNewClient :: Server -> ClientID -> MedHandle -> STM Client
 createNewClient Server{clMap, broadcastChannel} clId clUI = do
   clPrivateCommands <- newTChan
   clState <- newTVar Logged
@@ -49,7 +51,7 @@ createNewClient Server{clMap, broadcastChannel} clId clUI = do
   clMessages <- newTChan
   return Client{..}
 
-checkAndAddClient :: Server -> ClientID -> UIHandle -> STM (Maybe Client)
+checkAndAddClient :: Server -> ClientID -> MedHandle -> STM (Maybe Client)
 checkAndAddClient server@Server{clMap} clId ui = do
   clients <- readTVar clMap
   if clId `elem` M.keys clients
@@ -66,14 +68,18 @@ removeClient server@Server{..} clId = atomically $ do
   broadcastNotice server (printf "User %s left the chat" clId)
 
 runClient :: Server -> Client -> IO ()
-runClient server client@Client{..} = race_ (serverThread) $ forever  $ do   
-       input <- (uiReader clUI) "Text: " 
-       atomically $ sendPrivateCommand client (Perform input)
-  where
-   serverThread = join . atomically $ do
+runClient server client@Client{..} = race_ serverThread receiverThread `finally` (print "bam")
+ where
+  receiverThread = do
+    readQueue <- openReadChannel clUI "Text: "
+    forever . atomically $ do
+      input <- readTQueue readQueue
+      sendPrivateCommand client (Perform input)
+
+  serverThread = join . atomically $ do
     userState <- readTVar clState
     case userState of
-      Kicked reason -> return $ (uiRunner clUI) $ \ui -> writeUI ui $ printf "You have been kicked! Reason: %s" reason--withUI clUI $ \ui -> writeUI ui (printf "You have been kicked! Reason: %s" reason)
+      Kicked reason -> return $ enqueueWrite clUI $ printf "You have been kicked! Reason: %s" reason -- withUI clUI $ \ui -> writeUI ui (printf "You have been kicked! Reason: %s" reason)
       Logged -> return $
         do
           command <- atomically $ readTChan clPrivateCommands `orElse` readTChan clPublicCommands
@@ -155,7 +161,7 @@ renameUser server@Server{clMap} issuer oldName newName = performAdminAction serv
 
 handleCommand :: Server -> Client -> Command -> IO Bool
 handleCommand server client@Client{..} command = case command of
-  (Perform "/quit") -> return False
+  (Perform "/quit") -> write "<*server> Goodbye" >> return False
   _ -> do
     case command of
       (Perform what) -> atomically $ case words what of
@@ -171,13 +177,13 @@ handleCommand server client@Client{..} command = case command of
         strs | all null strs -> return ()
         _ -> broadcastMessage server clId what
       ShowPrivate (PrivateMessage from msg) -> write $ printf "<*%s*> %s" from msg
-      ShowPrivate (PrivateNotice msg) -> write  $ printf "<*server*> %s" msg
-      ShowPublic (PublicNotice msg) -> write  $ printf "<server> %s" msg
-      ShowPublic (PublicMessage from msg) -> write  $ printf "<%s> %s" from msg -- printLine clHandle $ printf "<%s>: %s" from msg
-    return True 
-    where 
-      write :: String -> IO ()
-      write string = (uiRunner clUI) $ \ui -> writeUI ui string
+      ShowPrivate (PrivateNotice msg) -> write $ printf "<*server*> %s" msg
+      ShowPublic (PublicNotice msg) -> write $ printf "<server> %s" msg
+      ShowPublic (PublicMessage from msg) -> write $ printf "<%s> %s" from msg -- printLine clHandle $ printf "<%s>: %s" from msg
+    return True
+ where
+  write :: String -> IO ()
+  write = enqueueWrite clUI
 
 runServer2 :: IO ()
 runServer2 = withSocketsDo $ do
@@ -190,22 +196,29 @@ runServer2 = withSocketsDo $ do
         acceptLoop = forever $ accept sock $ \(handle, peer) -> do
           printf "Accepted connection from %s\n" (show peer)
           tui <- UI <$> newTerminalUI handle "Text: "
-          forkFinally (talk tui server) (\_ -> withUI tui $ cleanupUI) 
+          forkFinally
+            (withMediator tui $ \handle -> talk handle server)
+            ( \case
+                Left (err :: SomeException) -> print err >> throw err
+                Right () -> putStrLn "Cleaning up" >> withUI tui cleanupUI
+            )
 
     race_ (atomically checkQuit >> print "Killing server") acceptLoop
 
 port :: Int
 port = 44444
 
-talk :: UI -> Server -> IO ()
-talk tui server = do 
-  uiHandle@UIHandle{..} <- launchUI tui   
-  fix $ \loop -> do
-    name <- uiReader "Enter your name: "
-    if null name
-      then loop
-      else mask $ \restore -> do
-        addResult <- atomically $ checkAndAddClient server name uiHandle
-        case addResult of
-          Nothing -> restore (uiRunner $ \ui -> writeUI ui (printf "User %s already logged on server! Choose a different name" name) >> loop)
-          Just newClient -> restore (runClient server newClient) `finally` removeClient server name >> printf "User %s disconnected" name
+talk :: MedHandle -> Server -> IO ()
+talk uiHandle@MedHandle{..} server = fix $ \loop -> do
+  name <- blockingRead "Enter your name: "
+  if null name
+    then loop
+    else mask $ \restore -> do
+      addResult <- atomically $ checkAndAddClient server name uiHandle
+      case addResult of
+        Nothing -> restore (enqueueWrite (printf "User %s already logged on server! Choose a different name" name) >> loop)
+        Just newClient ->
+          restore (runClient server newClient) `finally` do
+            print "Finalizing"
+            removeClient server name
+            putStrLn $ printf "User %s disconnected" name

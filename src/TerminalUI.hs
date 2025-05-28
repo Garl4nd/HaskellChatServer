@@ -4,48 +4,50 @@
 
 module TerminalUI (newTerminalUI) where
 
+import Control.Concurrent
 import Control.Concurrent.STM
+import Control.Exception (bracket)
 import System.Console.ANSI
 import System.IO
 import UIInterface
 
-data TerminalUI = TerminalUI {inputLock :: TMVar (), handle :: Handle, prompt :: String}
+data TerminalUI = TerminalUI {uiLock :: MVar (), handle :: Handle, prompt :: String}
 instance IsUI TerminalUI where
-  setupUI = setupTerminalUI
   writeUI = writeToTerminal
   readUI = readTerminalInput
   readUIWithPrompt = readTerminalInputWithPrompt
-  readCleanUpUI = cleanTerminalInput
   cleanupUI = hClose . handle
-  isValid = fmap not . hIsClosed . handle
+  isValidUI = fmap not . hIsClosed . handle
 
 newTerminalUI :: Handle -> String -> IO TerminalUI
 newTerminalUI handle prompt = do
-  inputLock <- atomically $ newTMVar ()
-  return TerminalUI{..}
+  uiLock <- newMVar ()
+  let termUI = TerminalUI{..}
+  setupTerminalUI termUI
+  return termUI
 
 lockTerminal :: TerminalUI -> IO ()
-lockTerminal = const $ return () -- atomically . takeTMVar . inputLock
+lockTerminal = takeMVar . uiLock
 
 unlockTerminal :: TerminalUI -> IO ()
-unlockTerminal = const $ return () -- atomically . flip putTMVar () . inputLock
+unlockTerminal = flip putMVar () . uiLock
 
 readTerminalInput :: TerminalUI -> IO String
 readTerminalInput tui@TerminalUI{..} = readTerminalInputWithPrompt tui prompt
 
 readTerminalInputWithPrompt :: TerminalUI -> String -> IO String
 readTerminalInputWithPrompt tui@TerminalUI{handle} prompt = do
-  lockTerminal tui
-  hPutStr handle prompt
-  hFlush handle
+  bracket (lockTerminal tui) (const $ unlockTerminal tui) $ \_ -> do
+    clearTerminalLine tui 0
+    hPutStr handle prompt
+    hFlush handle
   res <- hGetLine handle
-  cleanTerminalInput tui
-  unlockTerminal tui
+  clearTerminalLine tui 1
   return res
 
-cleanTerminalInput :: TerminalUI -> IO ()
-cleanTerminalInput TerminalUI{..} = do
-  hCursorUpLine handle 1
+clearTerminalLine :: TerminalUI -> Int -> IO ()
+clearTerminalLine TerminalUI{..} n = do
+  hCursorUpLine handle n
   hClearLine handle
 
 setupTerminalUI :: TerminalUI -> IO ()
@@ -54,11 +56,9 @@ setupTerminalUI TerminalUI{handle} = do
   hSetBuffering handle LineBuffering
 
 writeToTerminal :: TerminalUI -> String -> IO ()
-writeToTerminal tui@TerminalUI{handle, prompt} text = do
-  lockTerminal tui
+writeToTerminal tui@TerminalUI{handle, prompt} text = bracket (lockTerminal tui) (\_ -> unlockTerminal tui) $ \_ -> do
   hCursorUpLine handle 0
   hClearLine handle
   hPutStrLn handle text
   hPutStr handle prompt
   hFlush handle
-  unlockTerminal tui
