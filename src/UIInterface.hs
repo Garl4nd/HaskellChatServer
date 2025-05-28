@@ -17,8 +17,8 @@ class IsUI u where
   writeUI :: u -> String -> IO ()
   readUI :: u -> IO String
   readUIWithPrompt :: u -> String -> IO String
-  readCleanUpUI :: u -> IO ()
   cleanupUI :: u -> IO ()
+  isValidUI :: u -> IO Bool
 
 data UI where
   UI :: (IsUI u) => u -> UI

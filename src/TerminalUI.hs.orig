@@ -16,8 +16,13 @@ instance IsUI TerminalUI where
   writeUI = writeToTerminal
   readUI = readTerminalInput
   readUIWithPrompt = readTerminalInputWithPrompt
+<<<<<<< HEAD
+  readCleanUpUI = cleanTerminalInput
   cleanupUI = hClose . handle
-  isValidUI = fmap not . hIsClosed . handle
+  isValid = fmap not . hIsClosed . handle
+=======
+  cleanupUI TerminalUI{handle} = hPutStrLn handle "Connection over" >> hClose handle
+>>>>>>> 2191564d8bfa2d410a47ffe75ad682809d18e864
 
 newTerminalUI :: Handle -> String -> IO TerminalUI
 newTerminalUI handle prompt = do
