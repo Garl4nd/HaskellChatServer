@@ -17,6 +17,7 @@ instance IsUI TerminalUI where
   readUIWithPrompt = readTerminalInputWithPrompt
   readCleanUpUI = cleanTerminalInput
   cleanupUI = hClose . handle
+  isValid = fmap not . hIsClosed . handle
 
 newTerminalUI :: Handle -> String -> IO TerminalUI
 newTerminalUI handle prompt = do
