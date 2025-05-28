@@ -11,7 +11,11 @@ import System.Console.ANSI
 import System.IO
 import UIInterface
 
+<<<<<<< HEAD
 data TerminalUI = TerminalUI {uiLock :: MVar (), handle :: Handle, prompt :: String}
+=======
+data TerminalUI = TerminalUI {uiLock :: TMVar (), handle :: Handle, prompt :: String}
+>>>>>>> 85351c87e3cde84314100158e280b25a8bc0522e
 instance IsUI TerminalUI where
   writeUI = writeToTerminal
   readUI = readTerminalInput
